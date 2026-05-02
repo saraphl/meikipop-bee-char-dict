@@ -11,6 +11,7 @@ import os
 import pickle
 import re
 import time
+import zipfile
 from collections import Counter, defaultdict
 from itertools import count
 from typing import Optional
@@ -20,6 +21,7 @@ import requests
 from lxml import etree
 
 from meikipop.utils.paths import paths
+from meikipop.scripts.import_yomitan_dict_text import build_from_zip
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -35,6 +37,7 @@ URLS = {
     'kanjidic':  'http://www.edrdg.org/kanjidic/kanjidic2.xml.gz',
     'ids':       'https://raw.githubusercontent.com/cjkvi/cjkvi-ids/master/ids.txt',
     'frequency': 'https://api.jiten.moe/api/frequency-list/download?downloadType=csv',
+    'bee_char':  'https://characterdictionary.tokyo/api/yomitan-dict?vndb_user=u123456&honorifics=false&image=false&description=false&traits=false&seiyuu=false'
 }
 
 XML_LANG      = '{http://www.w3.org/XML/1998/namespace}lang'
@@ -79,9 +82,9 @@ def get_variants(reading: str) -> set:
 def ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
 
-def load_or_download(key: str) -> bytes:
+def load_or_download(key: str, use_cache: bool = False) -> bytes:
     path = os.path.join(DATA_DIR, key)
-    if os.path.exists(path):
+    if os.path.exists(path) and use_cache:
         print(f"  Using cached: {path}")
         with open(path, 'rb') as f:
             return f.read()
@@ -503,12 +506,16 @@ def build_kanjidic_data(kanjidic_gz: bytes, ids_text: str,
 def main():
     ensure_dirs()
 
-    print("\n[1/5] Loading source files ...")
+    print("\n[1/6] Loading source files ...")
     jmdict_gz   = load_or_download('jmdict_e')
     kanjidic_gz = load_or_download('kanjidic')
     ids_bytes   = load_or_download('ids')
     freq_bytes  = load_or_download('frequency')
     ids_text    = ids_bytes.decode('utf-8', errors='replace')
+    bee_zip     = load_or_download('bee_char')
+
+    all_entries:    dict = {}
+    all_lookup_map: dict = defaultdict(list)
 
     if not os.path.exists(DECONJUGATOR_PATH):
         print(f"ERROR: {DECONJUGATOR_PATH} not found.", file=sys.stderr)
@@ -517,25 +524,42 @@ def main():
         deconjugator_rules = [r for r in json.load(f) if isinstance(r, dict)]
     print(f"  {len(deconjugator_rules)} deconjugator rules loaded")
 
-    print("\n[2/5] Parsing frequency list ...")
+    print("\n[2/6] Parsing frequency list ...")
     freq_map = load_freq_map(freq_bytes)
 
-    print("\n[3/5] Parsing JMdict_e ...")
+    print("\n[3/6] Parsing JMdict_e ...")
     t0 = time.time()
     jmdict_root = parse_jmdict_root(jmdict_gz)
     entries, lookup_map = build_jmdict_data(jmdict_root, freq_map)
+    # Merge into combined structures
+    # On entry_id collision (same sequence across different dicts), last writer wins.
+    all_entries.update(entries)
+    for surface, me_list in lookup_map.items():
+        all_lookup_map[surface].extend(me_list)
     print(f"  Done in {time.time() - t0:.1f}s")
 
-    print("\n[4/5] Building kanjidic data ...")
+    print("\n[4/6] Building kanjidic data ...")
     t0 = time.time()
     kanji_entries = build_kanjidic_data(kanjidic_gz, ids_text, jmdict_root, freq_map)
     print(f"  Done in {time.time() - t0:.1f}s")
 
-    print(f"\n[5/5] Saving dictionary to {OUTPUT_PATH} ...")
+    print("\n[5/6] Parsing Bee's character dictionary ...")
+    t0 = time.time()
+    with zipfile.ZipFile(io.BytesIO(bee_zip), 'r') as zf:
+        entries, lookup_map = build_from_zip(zf, dict_index=0, freq_override={})
+
+        # Merge into combined structures
+        # On entry_id collision (same sequence across different dicts), last writer wins.
+        all_entries.update(entries)
+        for surface, me_list in lookup_map.items():
+            all_lookup_map[surface].extend(me_list)
+    print(f"  Done in {time.time() - t0:.1f}s")
+
+    print(f"\n[6/6] Saving dictionary to {OUTPUT_PATH} ...")
     t0 = time.time()
     payload = {
-        'entries':            entries,
-        'lookup_map':         dict(lookup_map),
+        'entries':            all_entries,
+        'lookup_map':         dict(all_lookup_map),
         'kanji_entries':      kanji_entries,
         'deconjugator_rules': deconjugator_rules,
     }
