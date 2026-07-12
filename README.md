@@ -9,3 +9,6 @@ Then just run `meikipop build-dict` command and your character dictionary should
 The author (rtr46) has a nice release setup in place, so I recommend just installing meikipop normally and then copying the `/src/meikipop/scripts/build_dictionary.py` over.
 
 For the original readme, refer to [rtr46's repository](https://github.com/rtr46/meikipop).
+
+<img width="1066" height="735" alt="image" src="https://github.com/user-attachments/assets/1fd8b0cb-3ce8-4171-8b6b-973081e5d689" />
+
