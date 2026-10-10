@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QFontInfo
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QApplication
 
+from meikipop.anki.deck import anki_deck, STATE_PRIORITIZED
 from meikipop.config.config import config, IS_MACOS
 from meikipop.dictionary.lookup import DictionaryEntry, KanjiEntry
 from meikipop.gui.magpie_manager import magpie_manager
@@ -27,6 +28,7 @@ class Popup(QWidget):
         super().__init__()
         self._latest_data = None
         self._last_latest_data = None
+        self._rendered_anki_version = -1
         self._data_lock = threading.Lock()
         self._previous_active_window_on_mac = None
 
@@ -163,11 +165,13 @@ class Popup(QWidget):
             self._calibrate_empirically()
 
         latest_data = self.get_latest_data()
-        if latest_data and latest_data != self._last_latest_data:
+        anki_version = anki_deck.version
+        if latest_data and (latest_data != self._last_latest_data or anki_version != self._rendered_anki_version):
             # update popup content
             full_html, new_size = self._calculate_content_and_size_char_count(latest_data)
             self.display_label.setText(full_html)
             self.setFixedSize(new_size)
+            self._rendered_anki_version = anki_version
         self._last_latest_data = latest_data
 
         if self._latest_data and self.input_loop.is_virtual_hotkey_down() and config.is_enabled:
@@ -256,6 +260,8 @@ class Popup(QWidget):
 
             header_text_calc = entry.written_form
             if entry.reading: header_text_calc += f" [{entry.reading}]"
+            anki_state = anki_deck.get_state(entry) if config.anki_enabled else None
+            if anki_state: header_text_calc += " new"
             header_ratio = len(header_text_calc) / self.header_chars_per_line
             max_ratio = max(max_ratio, header_ratio)
 
@@ -268,6 +274,9 @@ class Popup(QWidget):
                     header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">({deconj_str})</span>'
             if config.show_frequency and entry.freq < 999_999:
                 header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.6;">#{entry.freq}</span>'
+            if anki_state:
+                badge_color = config.color_highlight_reading if anki_state == STATE_PRIORITIZED else config.color_highlight_word
+                header_html += f' <span style="color:{badge_color}; font-size:{config.font_size_definitions - 2}px;">new</span>'
             def_text_parts_calc = []
             def_text_parts_html = []
             for idx, sense in enumerate(entry.senses):
@@ -322,6 +331,15 @@ class Popup(QWidget):
 
         final_size = QSize(int(optimal_content_width) + horizontal_padding, final_height + vertical_padding)
         return full_html, final_size
+
+    def handle_numpad_digit(self, digit: int):
+        # called from the numpad listener thread - prioritizes the n-th displayed entry in Anki
+        entries = self._last_latest_data
+        if not self.is_visible or not config.anki_enabled or not entries or digit > len(entries):
+            return
+        entry = entries[digit - 1]
+        if isinstance(entry, DictionaryEntry):
+            anki_deck.prioritize(entry)
 
     def move_to(self, x, y):
         cursor_point = QPoint(x, y)

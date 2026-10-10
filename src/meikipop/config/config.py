@@ -61,6 +61,13 @@ class Config:
             'color_highlight_reading': '#90EE90',
             'background_opacity': 245,
             'popup_position_mode': 'visual_novel_mode'
+        },
+        'Anki': {
+            'anki_enabled': False,
+            'anki_connect_url': 'http://localhost:8765',
+            'anki_deck': 'Core 10K',
+            'anki_word_fields': 'vocab, Notes-Kanjified-vocab',
+            'anki_reading_field': 'vocab-kana'
         }
     }
 

@@ -37,7 +37,7 @@ URLS = {
     'kanjidic':  'http://www.edrdg.org/kanjidic/kanjidic2.xml.gz',
     'ids':       'https://raw.githubusercontent.com/cjkvi/cjkvi-ids/master/ids.txt',
     'frequency': 'https://api.jiten.moe/api/frequency-list/download?downloadType=csv',
-    'bee_char':  'https://characterdictionary.tokyo/api/yomitan-dict?vndb_user=u123456&honorifics=false&image=false&description=false&traits=false&seiyuu=false'
+    'bee_char':  'https://characterdictionary.tokyo/api/yomitan-dict?vndb_user=u257221&honorifics=false&image=false&description=false&traits=false&seiyuu=false'
 }
 
 XML_LANG      = '{http://www.w3.org/XML/1998/namespace}lang'

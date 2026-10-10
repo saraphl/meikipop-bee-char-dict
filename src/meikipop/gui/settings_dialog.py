@@ -4,7 +4,9 @@ from PyQt6.QtGui import QColor, QIcon, QFontDatabase
 from PyQt6.QtWidgets import (QWidget, QDialog, QFormLayout, QComboBox,
                              QSpinBox, QCheckBox, QPushButton, QColorDialog, QVBoxLayout, QHBoxLayout,
                              QGroupBox, QDialogButtonBox, QLabel, QSlider, QDoubleSpinBox,
-                             QTabWidget, QSizePolicy, QFontComboBox)
+                             QTabWidget, QSizePolicy, QFontComboBox, QLineEdit)
+
+from meikipop.anki.deck import anki_deck
 
 from meikipop.dictionary.lookup import Lookup
 from meikipop.config.config import config, APP_NAME, IS_WINDOWS
@@ -227,6 +229,23 @@ class SettingsDialog(QDialog):
 
         kanji_group.setLayout(kanji_layout)
         self.tab_content_layout.addWidget(kanji_group)
+
+        # --- Group 3: Anki ---
+        anki_group = QGroupBox("Anki")
+        anki_layout = QFormLayout()
+        self.form_layouts.append(anki_layout)
+
+        self.anki_enabled_check = QCheckBox()
+        self.anki_enabled_check.setChecked(config.anki_enabled)
+        self.anki_enabled_check.setToolTip("Marks new cards of the deck in the popup (requires AnkiConnect).\n"
+                                           "Press a numpad digit to move the n-th entry's card to the top of the new card queue.")
+        anki_layout.addRow("Mark New Cards:", self.anki_enabled_check)
+
+        self.anki_deck_edit = QLineEdit(config.anki_deck)
+        anki_layout.addRow("Deck:", self.anki_deck_edit)
+
+        anki_group.setLayout(anki_layout)
+        self.tab_content_layout.addWidget(anki_group)
         self.tab_content_layout.addStretch()
 
         # ==========================================
@@ -439,6 +458,10 @@ class SettingsDialog(QDialog):
         config.show_kanji = self.show_kanji_check.isChecked()
         config.show_examples = self.show_examples_check.isChecked()
         config.show_components = self.show_components_check.isChecked()
+        anki_changed = (config.anki_enabled, config.anki_deck) != (self.anki_enabled_check.isChecked(),
+                                                                   self.anki_deck_edit.text().strip())
+        config.anki_enabled = self.anki_enabled_check.isChecked()
+        config.anki_deck = self.anki_deck_edit.text().strip()
 
         selected_friendly_name = self.popup_position_combo.currentText()
         config.popup_position_mode = self.popup_mode_map.get(selected_friendly_name, "flip_vertically")
@@ -453,6 +476,8 @@ class SettingsDialog(QDialog):
         self.input_loop.reapply_settings()
         self.popup_window.reapply_settings()
         self.tray_icon.reapply_settings()
+        if anki_changed:
+            anki_deck.reapply_settings()
         self.ocr_processor.shared_state.screenshot_trigger_event.set()
 
         self.accept()

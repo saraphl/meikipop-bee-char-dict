@@ -7,6 +7,7 @@ import threading
 from PyQt6.QtCore import qInstallMessageHandler
 from PyQt6.QtWidgets import QApplication
 
+from meikipop.anki.deck import anki_deck
 from meikipop.utils.logger import setup_logging
 from meikipop.config.config import APP_NAME, APP_VERSION
 from meikipop.dictionary.lookup import Lookup
@@ -66,6 +67,8 @@ def run_gui():
 
     for t in [lookup, hit_scanner, ocr_processor, screen_manager, input_loop]:
         t.start()
+    anki_deck.set_numpad_handler(popup_window.handle_numpad_digit)
+    anki_deck.start()
 
     ready_message = f"""
     --------------------------------------------------

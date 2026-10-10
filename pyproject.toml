@@ -29,7 +29,8 @@ dependencies = [
     "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
     "lxml",
     "platformdirs",
-    "pygobject; sys_platform == 'linux'"
+    "pygobject; sys_platform == 'linux'",
+    "evdev; sys_platform == 'linux'"
 ]
 
 [project.scripts]

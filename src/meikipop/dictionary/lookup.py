@@ -22,6 +22,17 @@ JAPANESE_SEPARATORS = {
 logger = logging.getLogger(__name__)
 
 
+def kata_to_hira(text: str) -> str:
+    res = []
+    for c in text:
+        code = ord(c)
+        if   0x30A1 <= code <= 0x30F6: res.append(chr(code - 0x60))
+        elif code == 0x30FD:           res.append('\u309D')  # ヽ → ゝ
+        elif code == 0x30FE:           res.append('\u309E')  # ヾ → ゞ
+        else:                          res.append(c)
+    return ''.join(res)
+
+
 @dataclass
 class DictionaryEntry:
     id: int
@@ -307,11 +318,4 @@ class Lookup(threading.Thread):
         return ''.join(res)
 
     def _kata_to_hira(self, text: str) -> str:
-        res = []
-        for c in text:
-            code = ord(c)
-            if   0x30A1 <= code <= 0x30F6: res.append(chr(code - 0x60))
-            elif code == 0x30FD:           res.append('\u309D')  # ヽ → ゝ
-            elif code == 0x30FE:           res.append('\u309E')  # ヾ → ゞ
-            else:                          res.append(c)
-        return ''.join(res)
+        return kata_to_hira(text)
