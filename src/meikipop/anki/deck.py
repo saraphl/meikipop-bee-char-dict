@@ -61,7 +61,7 @@ class AnkiDeck:
         self._to_index: Dict[Tuple[str, str], int] = {}  # deck adverbs like ひしひしと, keyed without the と
         self._prioritized: Set[int] = set()
         self._pending: Set[int] = set()
-        self._top_position: Optional[int] = None
+        self._negative_dues: Dict[int, Tuple[int, Optional[int]]] = {}  # card -> (position, mod), worker only
         self._loader: Optional[threading.Thread] = None
         self._reload_event = threading.Event()
         self._queue: queue.Queue = queue.Queue()
@@ -80,6 +80,14 @@ class AnkiDeck:
         if payload.get('error'):
             raise AnkiConnectError(f"AnkiConnect '{action}' failed: {payload['error']}")
         return payload['result']
+
+    def _request_many(self, *actions: Tuple[str, dict]) -> list:
+        # independent actions batched into one round trip
+        results = self._request('multi', actions=[{'action': a, 'version': 6, 'params': p} for a, p in actions])
+        for (action, _), result in zip(actions, results):
+            if result.get('error'):
+                raise AnkiConnectError(f"AnkiConnect '{action}' failed: {result['error']}")
+        return [result['result'] for result in results]
 
     def set_numpad_handler(self, handler):
         self._numpad_handler = handler
@@ -207,7 +215,9 @@ class AnkiDeck:
                     self._pending.discard(card_id)
 
     def _prioritize(self, card_id: int, written_form: str):
-        if not self._request('findCards', query=f'cid:{card_id} is:new -is:suspended'):
+        eligible, negative = self._request_many(('findCards', {'query': f'cid:{card_id} is:new -is:suspended'}),
+                                                ('findCards', {'query': 'is:new prop:pos<0'}))
+        if not eligible:
             logger.info(f"Anki: '{written_form}' is no longer an unsuspended new card, skipping.")
             with self._lock:
                 self._index = {k: v for k, v in self._index.items() if v != card_id}
@@ -215,19 +225,23 @@ class AnkiDeck:
                 self.version += 1
             return
 
-        # new card positions are collection-wide; cardsInfo is slow, so only fetch cards below the cached top
-        top = self._top_position if self._top_position is not None else 0
-        lower = self._request('findCards', query=f'is:new prop:pos<{top}')
-        if lower:
-            top = min(c['due'] for c in self._request('cardsInfo', cards=lower))
-        position = top - 1
+        # new card positions are collection-wide; Anki's search rejects negative bounds and cardsInfo is slow,
+        # so positions are cached and only re-read for cards modified since (cardsModTime is cheap)
+        mods = {m['cardId']: m['mod'] for m in self._request('cardsModTime', cards=negative) if m} if negative else {}
+        stale = [c for c, mod in mods.items() if self._negative_dues.get(c, (None, None))[1] != mod]
+        if stale:
+            for info in self._request('cardsInfo', cards=stale):
+                if 'cardId' in info:
+                    self._negative_dues[info['cardId']] = (info['due'], info['mod'])
+        self._negative_dues = {c: self._negative_dues[c] for c in mods if c in self._negative_dues}
+        position = min((due for due, _ in self._negative_dues.values()), default=0) - 1
 
         result = self._request('setSpecificValueOfCard', card=card_id, keys=['due'], newValues=[position])
         if result != [True]:
             raise AnkiConnectError(f"setSpecificValueOfCard returned {result}")
 
+        self._negative_dues[card_id] = (position, None)  # new mod unknown, so it's re-read on the next press
         with self._lock:
-            self._top_position = position
             self._prioritized.add(card_id)
             self.version += 1
         logger.info(f"Anki: Moved '{written_form}' to the top of the new card queue (position {position}).")
