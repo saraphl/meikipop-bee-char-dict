@@ -31,6 +31,8 @@ class Config:
         'Settings': {
             'hotkey': 'shift',
             'scan_region': 'region',
+            'scan_window_class': '',
+            'scan_window_caption': '',
             'max_lookup_length': 25,
             'glens_low_bandwidth': False,
             'ocr_provider': 'meikiocr (local)',
@@ -108,7 +110,8 @@ class Config:
             parser.add_section(section)
             for key in settings:
                 val = getattr(self, key)
-                parser.set(section, key, str(val).lower() if isinstance(val, bool) else str(val))
+                # escape '%' so configparser interpolation doesn't choke on values like window titles
+                parser.set(section, key, str(val).lower() if isinstance(val, bool) else str(val).replace('%', '%%'))
 
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             parser.write(f)

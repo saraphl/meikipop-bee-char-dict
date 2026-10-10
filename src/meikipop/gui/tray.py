@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from meikipop.config.config import APP_NAME, config, IS_WINDOWS
 from meikipop.gui.settings_dialog import SettingsDialog
 from meikipop.ocr.ocr import OcrProcessor
+from meikipop.screenshot import kwin_window
 from meikipop.utils.paths import paths
 
 
@@ -85,6 +86,15 @@ class TrayIcon(QSystemTrayIcon):
         self.scan_area_action_group.addAction(region_action)
         self.scan_area_actions.append(region_action)
 
+        self.window_action = None
+        if kwin_window.is_available():
+            self.window_action = scan_area_menu.addAction("")
+            self.window_action.setCheckable(True)
+            self.window_action.setData('window')
+            self.scan_area_action_group.addAction(self.window_action)
+            self.scan_area_actions.append(self.window_action)
+            self.update_window_action_text()
+
         for i, res in enumerate(self.screen_manager.get_screens()):
             action = scan_area_menu.addAction(f"Screen {i} ({res['width']}x{res['height']})")
             action.setCheckable(True)
@@ -131,6 +141,8 @@ class TrayIcon(QSystemTrayIcon):
 
     def update_scan_area_check(self):
         current_region = config.scan_region
+        if current_region == 'window' and not self.screen_manager.window_uuid:
+            current_region = '1'  # no window was bound at startup, screen manager fell back to screen 1
         action_to_check = None
         for action in self.scan_area_actions:
             if str(action.data()) == str(current_region):
@@ -151,7 +163,18 @@ class TrayIcon(QSystemTrayIcon):
 
     def _on_scan_area_selected(self, action: QAction):
         selected_id = action.data()
-        if selected_id == 'region':
+        if selected_id == 'window':
+            # the pick runs a nested event loop, so prevent changing the scan area meanwhile
+            self.scan_area_action_group.setEnabled(False)
+            try:
+                picked = self.screen_manager.set_scan_window()
+            finally:
+                self.scan_area_action_group.setEnabled(True)
+            if picked:
+                self.update_window_action_text()
+            else:
+                self.update_scan_area_check()
+        elif selected_id == 'region':
             if self.screen_manager.set_scan_region():
                 if config.scan_region != 'region':
                     config.scan_region = 'region'
@@ -164,6 +187,13 @@ class TrayIcon(QSystemTrayIcon):
                 self.screen_manager.set_scan_screen(index)
                 config.scan_region = str(index)
                 config.save()
+
+    def update_window_action_text(self):
+        caption = config.scan_window_caption
+        if len(caption) > 40:
+            caption = caption[:40] + "…"
+        caption = caption.replace('&', '&&')  # '&' would otherwise mark a menu mnemonic
+        self.window_action.setText(f"Window: {caption}" if caption else "Window (click to select)")
 
     def _on_ocr_provider_selected(self, action):
         provider_name = action.text()
