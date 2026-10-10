@@ -1,5 +1,7 @@
 # meikipop/main.py
 import argparse
+import logging
+import os
 import signal
 import sys
 import threading
@@ -76,7 +78,7 @@ def run_gui():
 
     --------------------------------------------------
     """
-    print(ready_message)
+    print(ready_message, flush=True)
 
     def signal_handler(sig, frame):
         QApplication.quit()
@@ -90,7 +92,13 @@ def run_gui():
     shared_state.ocr_queue.put(None)
     shared_state.hit_scan_queue.trigger()
     shared_state.lookup_queue.put(None)
-    sys.exit(exit_code)
+
+    # skip interpreter teardown: freeing the dictionary takes seconds and native threads
+    # (e.g. the Wayland screencast) can call into half-finalized modules and segfault
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)
 
 
 def main():
