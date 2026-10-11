@@ -261,7 +261,7 @@ class Popup(QWidget):
             header_text_calc = entry.written_form
             if entry.reading: header_text_calc += f" [{entry.reading}]"
             anki_state = anki_deck.get_state(entry) if config.anki_enabled else None
-            if anki_state: header_text_calc += " new"
+            if anki_state: header_text_calc += " new ✓" if anki_state == STATE_PRIORITIZED else " new"
             header_ratio = len(header_text_calc) / self.header_chars_per_line
             max_ratio = max(max_ratio, header_ratio)
 
@@ -274,9 +274,13 @@ class Popup(QWidget):
                     header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">({deconj_str})</span>'
             if config.show_frequency and entry.freq < 999_999:
                 header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.6;">#{entry.freq}</span>'
-            if anki_state:
-                badge_color = config.color_highlight_reading if anki_state == STATE_PRIORITIZED else config.color_highlight_word
-                header_html += f' <span style="color:{badge_color}; font-size:{config.font_size_definitions - 2}px;">new</span>'
+            if anki_state == STATE_PRIORITIZED:
+                # more saturated than the reading color, so it stands out from the word-colored "new"
+                h, _, _, _ = QColor(config.color_highlight_reading).getHsvF()
+                badge_color = QColor.fromHsvF(max(h, 0.0), 0.8, 0.85).name()
+                header_html += f' <span style="color:{badge_color}; font-size:{config.font_size_definitions - 2}px;">new ✓</span>'
+            elif anki_state:
+                header_html += f' <span style="color:{config.color_highlight_word}; font-size:{config.font_size_definitions - 2}px;">new</span>'
             def_text_parts_calc = []
             def_text_parts_html = []
             for idx, sense in enumerate(entry.senses):
