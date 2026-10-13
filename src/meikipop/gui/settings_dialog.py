@@ -238,7 +238,8 @@ class SettingsDialog(QDialog):
         self.anki_enabled_check = QCheckBox()
         self.anki_enabled_check.setChecked(config.anki_enabled)
         self.anki_enabled_check.setToolTip("Marks new cards of the deck in the popup (requires AnkiConnect).\n"
-                                           "Press a numpad digit to move the n-th entry's card to the top of the new card queue.")
+                                           "Press a numpad digit to move the n-th entry's card to the top of the new card queue\n"
+                                           "(requires meikipop's Anki add-on from anki_addon/meikipop_bridge).")
         anki_layout.addRow("Mark New Cards:", self.anki_enabled_check)
 
         self.anki_deck_edit = QLineEdit(config.anki_deck)

@@ -15,6 +15,7 @@ from meikipop.dictionary.lookup import kata_to_hira
 logger = logging.getLogger(__name__)
 
 RETRY_INTERVAL_SECONDS = 10
+BRIDGE_TIMEOUT_SECONDS = 10  # longer than the add-on's own wait for Anki's main thread
 TAG_REGEX = re.compile(r'<[^>]+>')
 FURIGANA_REGEX = re.compile(r'\[[^\]]*\]')
 SEARCH_SPECIAL_REGEX = re.compile(r'([\\"*_])')
@@ -23,11 +24,11 @@ STATE_NEW = 'new'
 STATE_PRIORITIZED = 'prioritized'
 
 
-class AnkiConnectError(Exception):
+class AnkiError(Exception):
     pass
 
 
-class AnkiConnectUnreachable(AnkiConnectError):
+class AnkiUnreachable(AnkiError):
     pass
 
 
@@ -61,7 +62,6 @@ class AnkiDeck:
         self._to_index: Dict[Tuple[str, str], int] = {}  # deck adverbs like ひしひしと, keyed without the と
         self._prioritized: Set[int] = set()
         self._pending: Set[int] = set()
-        self._negative_dues: Dict[int, Tuple[int, Optional[int]]] = {}  # card -> (position, mod), worker only
         self._loader: Optional[threading.Thread] = None
         self._reload_event = threading.Event()
         self._queue: queue.Queue = queue.Queue()
@@ -70,24 +70,24 @@ class AnkiDeck:
         self._numpad_listener: Optional[NumpadListener] = None
         self.version = 0  # bumped on every change so the popup knows to re-render
 
-    def _request(self, action: str, **params):
+    @staticmethod
+    def _post_json(url: str, payload: dict, name: str, timeout: float, hint: str = '') -> dict:
         try:
-            response = requests.post(config.anki_connect_url,
-                                     json={'action': action, 'version': 6, 'params': params}, timeout=5)
-            payload = response.json()
+            response = requests.post(url, json=payload, timeout=timeout).json()
+        except requests.Timeout as e:
+            raise AnkiUnreachable(f"{name} didn't respond in time") from e
         except (requests.RequestException, ValueError) as e:
-            raise AnkiConnectUnreachable(f"AnkiConnect unreachable: {e}") from e
-        if payload.get('error'):
-            raise AnkiConnectError(f"AnkiConnect '{action}' failed: {payload['error']}")
-        return payload['result']
+            raise AnkiUnreachable(f"{name} unreachable{hint}: {e}") from e
+        if not isinstance(response, dict):
+            raise AnkiError(f"unexpected response from {name}: {response!r}")
+        return response
 
-    def _request_many(self, *actions: Tuple[str, dict]) -> list:
-        # independent actions batched into one round trip
-        results = self._request('multi', actions=[{'action': a, 'version': 6, 'params': p} for a, p in actions])
-        for (action, _), result in zip(actions, results):
-            if result.get('error'):
-                raise AnkiConnectError(f"AnkiConnect '{action}' failed: {result['error']}")
-        return [result['result'] for result in results]
+    def _request(self, action: str, **params):
+        payload = self._post_json(config.anki_connect_url, {'action': action, 'version': 6, 'params': params},
+                                  'AnkiConnect', timeout=5)
+        if payload.get('error'):
+            raise AnkiError(f"AnkiConnect '{action}' failed: {payload['error']}")
+        return payload.get('result')
 
     def set_numpad_handler(self, handler):
         self._numpad_handler = handler
@@ -125,11 +125,11 @@ class AnkiDeck:
             try:
                 self._load()
                 continue
-            except AnkiConnectUnreachable as e:
+            except AnkiUnreachable as e:
                 if not warned:
                     logger.warning(f"Anki: {e}. Retrying every {RETRY_INTERVAL_SECONDS}s in the background.")
                     warned = True
-            except AnkiConnectError as e:
+            except AnkiError as e:
                 logger.error(f"Anki: Could not load deck '{config.anki_deck}': {e}")
                 continue
             except Exception:
@@ -141,7 +141,7 @@ class AnkiDeck:
 
     def _load(self):
         if not config.anki_deck:
-            raise AnkiConnectError("no deck configured")
+            raise AnkiError("no deck configured")
         deck_query = f'"deck:{_escape_search(config.anki_deck)}" -is:suspended is:new'
         word_fields = [f.strip() for f in config.anki_word_fields.split(',') if f.strip()]
         reading_field = config.anki_reading_field.strip()
@@ -206,7 +206,7 @@ class AnkiDeck:
             card_id, written_form = self._queue.get()
             try:
                 self._prioritize(card_id, written_form)
-            except AnkiConnectError as e:
+            except AnkiError as e:
                 logger.warning(f"Anki: Could not prioritize '{written_form}': {e}")
             except Exception:
                 logger.exception(f"Anki: Unexpected error while prioritizing '{written_form}'.")
@@ -215,36 +215,27 @@ class AnkiDeck:
                     self._pending.discard(card_id)
 
     def _prioritize(self, card_id: int, written_form: str):
-        eligible, negative = self._request_many(('findCards', {'query': f'cid:{card_id} is:new -is:suspended'}),
-                                                ('findCards', {'query': 'is:new prop:pos<0'}))
-        if not eligible:
-            logger.info(f"Anki: '{written_form}' is no longer an unsuspended new card, skipping.")
-            with self._lock:
-                self._index = {k: v for k, v in self._index.items() if v != card_id}
-                self._to_index = {k: v for k, v in self._to_index.items() if v != card_id}
-                self.version += 1
+        # AnkiConnect rejects position edits, so meikipop's own Anki add-on (anki_addon/meikipop_bridge) does this
+        response = self._post_json(f'{config.anki_bridge_url}/prioritize', {'card': card_id},
+                                   "meikipop's Anki add-on", timeout=BRIDGE_TIMEOUT_SECONDS, hint=' (is it installed?)')
+        if 'error' in response:
+            raise AnkiError(f"meikipop's Anki add-on failed: {response['error']}")
+
+        if 'skipped' in response:
+            logger.info(f"Anki: Skipped '{written_form}': {response['skipped']}.")
+            if response.get('stale'):  # no longer a new card, so drop its marker
+                with self._lock:
+                    self._index = {k: v for k, v in self._index.items() if v != card_id}
+                    self._to_index = {k: v for k, v in self._to_index.items() if v != card_id}
+                    self.version += 1
             return
+        if not isinstance(response.get('position'), int):
+            raise AnkiError(f"unexpected response from meikipop's Anki add-on: {response!r}")
 
-        # new card positions are collection-wide; Anki's search rejects negative bounds and cardsInfo is slow,
-        # so positions are cached and only re-read for cards modified since (cardsModTime is cheap)
-        mods = {m['cardId']: m['mod'] for m in self._request('cardsModTime', cards=negative) if m} if negative else {}
-        stale = [c for c, mod in mods.items() if self._negative_dues.get(c, (None, None))[1] != mod]
-        if stale:
-            for info in self._request('cardsInfo', cards=stale):
-                if 'cardId' in info:
-                    self._negative_dues[info['cardId']] = (info['due'], info['mod'])
-        self._negative_dues = {c: self._negative_dues[c] for c in mods if c in self._negative_dues}
-        position = min((due for due, _ in self._negative_dues.values()), default=0) - 1
-
-        result = self._request('setSpecificValueOfCard', card=card_id, keys=['due'], newValues=[position])
-        if result != [True]:
-            raise AnkiConnectError(f"setSpecificValueOfCard returned {result}")
-
-        self._negative_dues[card_id] = (position, None)  # new mod unknown, so it's re-read on the next press
         with self._lock:
             self._prioritized.add(card_id)
             self.version += 1
-        logger.info(f"Anki: Moved '{written_form}' to the top of the new card queue (position {position}).")
+        logger.info(f"Anki: Moved '{written_form}' to the top of the new card queue (position {response['position']}).")
 
 
 anki_deck = AnkiDeck()
