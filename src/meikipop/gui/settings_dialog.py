@@ -245,6 +245,13 @@ class SettingsDialog(QDialog):
         self.anki_deck_edit = QLineEdit(config.anki_deck)
         anki_layout.addRow("Deck:", self.anki_deck_edit)
 
+        self.anki_prioritized_spin = QSpinBox()
+        self.anki_prioritized_spin.setRange(0, 1_000_000)
+        self.anki_prioritized_spin.setValue(config.anki_prioritized_below)
+        self.anki_prioritized_spin.setToolTip("New cards positioned below this count as repositioned (green \"new ✓\").\n"
+                                              "Cards moved by the numpad always get a negative position, so 0 covers only those.")
+        anki_layout.addRow("Repositioned Below:", self.anki_prioritized_spin)
+
         anki_group.setLayout(anki_layout)
         self.tab_content_layout.addWidget(anki_group)
         self.tab_content_layout.addStretch()
@@ -459,10 +466,10 @@ class SettingsDialog(QDialog):
         config.show_kanji = self.show_kanji_check.isChecked()
         config.show_examples = self.show_examples_check.isChecked()
         config.show_components = self.show_components_check.isChecked()
-        anki_changed = (config.anki_enabled, config.anki_deck) != (self.anki_enabled_check.isChecked(),
-                                                                   self.anki_deck_edit.text().strip())
-        config.anki_enabled = self.anki_enabled_check.isChecked()
-        config.anki_deck = self.anki_deck_edit.text().strip()
+        anki_settings = (self.anki_enabled_check.isChecked(), self.anki_deck_edit.text().strip(),
+                         self.anki_prioritized_spin.value())
+        anki_changed = (config.anki_enabled, config.anki_deck, config.anki_prioritized_below) != anki_settings
+        config.anki_enabled, config.anki_deck, config.anki_prioritized_below = anki_settings
 
         selected_friendly_name = self.popup_position_combo.currentText()
         config.popup_position_mode = self.popup_mode_map.get(selected_friendly_name, "flip_vertically")

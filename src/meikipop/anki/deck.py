@@ -53,7 +53,8 @@ def _is_adverb_to(entry) -> bool:
 class AnkiDeck:
     """
     Index of the new cards in the configured Anki deck, keyed by (word, reading).
-    Prioritized cards are new cards moved to a negative queue position, so the state survives restarts.
+    Prioritized cards are new cards positioned below `anki_prioritized_below` (the add-on uses negative positions),
+    so the state survives restarts.
     """
 
     def __init__(self):
@@ -147,7 +148,7 @@ class AnkiDeck:
         reading_field = config.anki_reading_field.strip()
 
         new_cards = set(self._request('findCards', query=deck_query))
-        prioritized = set(self._request('findCards', query=f'{deck_query} prop:pos<0'))
+        prioritized = set(self._request('findCards', query=f'{deck_query} prop:pos<{config.anki_prioritized_below}'))
         notes = self._request('notesInfo', query=deck_query)
 
         index, to_index = {}, {}

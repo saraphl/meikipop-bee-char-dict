@@ -70,7 +70,8 @@ class Config:
             'anki_bridge_url': 'http://127.0.0.1:8766',
             'anki_deck': 'Core 10K',
             'anki_word_fields': 'vocab, Notes-Kanjified-vocab',
-            'anki_reading_field': 'vocab-kana'
+            'anki_reading_field': 'vocab-kana',
+            'anki_prioritized_below': 0
         }
     }
 

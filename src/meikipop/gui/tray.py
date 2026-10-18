@@ -167,7 +167,11 @@ class TrayIcon(QSystemTrayIcon):
             # the pick runs a nested event loop, so prevent changing the scan area meanwhile
             self.scan_area_action_group.setEnabled(False)
             try:
-                picked = self.screen_manager.set_scan_window()
+                # switching to window mode reuses the last window if open; choosing it again picks a new one
+                if self.screen_manager.window_uuid:
+                    picked = self.screen_manager.set_scan_window()
+                else:
+                    picked = self.screen_manager.bind_saved_or_pick_window()
             finally:
                 self.scan_area_action_group.setEnabled(True)
             if picked:

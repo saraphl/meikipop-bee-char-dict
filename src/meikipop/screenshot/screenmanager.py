@@ -36,8 +36,7 @@ class ScreenManager(threading.Thread):
         if config.scan_region == "region":
             self.set_scan_region()
         elif config.scan_region == "window" and kwin_window.is_available():
-            # Esc on the crosshair falls back to the last used window
-            if not (self.set_scan_window() or self.rebind_saved_window()):
+            if not self.bind_saved_or_pick_window():
                 logger.warning("No window selected, defaulting to screen 1.")
                 self.set_scan_screen(1)
         else:
@@ -132,6 +131,15 @@ class ScreenManager(threading.Thread):
         config.scan_window_caption = info.get('caption', '')
         config.save()
         return True
+
+    def bind_saved_or_pick_window(self):
+        """Binds the previously used window if it's open, otherwise shows the crosshair to pick one."""
+        if self.rebind_saved_window():
+            if config.scan_region != 'window':
+                config.scan_region = 'window'
+                config.save()
+            return True
+        return self.set_scan_window()
 
     def rebind_saved_window(self):
         info = self._find_saved_window()
