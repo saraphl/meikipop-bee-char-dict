@@ -315,7 +315,9 @@ def build_jmdict_data(root, freq_map: dict):
                 dedup = (reb, written_form, reading, entry_id)
                 if dedup not in seen_lookup:
                     seen_lookup.add(dedup)
-                    freq = freq_map.get((reb, display_reb), DEFAULT_FREQ) if reb == written_form else DEFAULT_FREQ
+                    # Kana ranks can't be attributed to a single entry, so kanji-headword entries use the headword's rank
+                    freq_key = (reb, display_reb) if reb == written_form else (written_form, reading or written_form)
+                    freq = freq_map.get(freq_key, DEFAULT_FREQ)
                     lookup_map[reb].append((written_form, reading, freq, entry_id))
 
     n_refs = sum(len(v) for v in lookup_map.values())
