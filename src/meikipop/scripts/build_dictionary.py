@@ -1,7 +1,7 @@
 """
 build_dictionary.py
 Builds dictionary.pkl from downloaded source files.
-Downloaded source files are cached in user cache directory and reused on subsequent runs.
+Downloaded source files are cached in user cache directory and reused for 24 hours (Bee's character dictionary is always redownloaded).
 """
 
 import gzip
@@ -10,6 +10,7 @@ import json
 import os
 import pickle
 import re
+import sys
 import time
 import zipfile
 from collections import Counter, defaultdict
@@ -82,17 +83,30 @@ def get_variants(reading: str) -> set:
 def ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
 
-def load_or_download(key: str, use_cache: bool = False) -> bytes:
+def load_or_download(key: str, max_age_hours: float = 24) -> bytes:
+    """Reuses the cached file if it's younger than max_age_hours, otherwise downloads it."""
     path = os.path.join(DATA_DIR, key)
-    if os.path.exists(path) and use_cache:
+    if os.path.exists(path) and 0 <= time.time() - os.path.getmtime(path) < max_age_hours * 3600:
         print(f"  Using cached: {path}")
         with open(path, 'rb') as f:
             return f.read()
     url = URLS[key]
     print(f"  Downloading {key} from {url} ...")
-    data = requests.get(url, timeout=120).content
-    with open(path, 'wb') as f:
+    try:
+        response = requests.get(url, timeout=120)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        if not os.path.exists(path):
+            raise
+        print(f"  WARNING: Download of {key} failed ({e}), falling back to cached: {path}")
+        with open(path, 'rb') as f:
+            return f.read()
+    data = response.content
+    # Write to a temp file first so an interrupted write never leaves a truncated cache file
+    tmp_path = path + '.part'
+    with open(tmp_path, 'wb') as f:
         f.write(data)
+    os.replace(tmp_path, path)
     print(f"  Saved {len(data) // 1024} KB to {path}")
     return data
 
@@ -514,7 +528,7 @@ def main():
     ids_bytes   = load_or_download('ids')
     freq_bytes  = load_or_download('frequency')
     ids_text    = ids_bytes.decode('utf-8', errors='replace')
-    bee_zip     = load_or_download('bee_char')
+    bee_zip     = load_or_download('bee_char', max_age_hours=0)  # small, always fetch the latest
 
     all_entries:    dict = {}
     all_lookup_map: dict = defaultdict(list)

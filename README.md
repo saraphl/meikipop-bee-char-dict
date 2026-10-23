@@ -4,7 +4,7 @@ I wanted to include the amazing [Bee's character dictionary](https://characterdi
 
 Bee character dictionary website has various settings, so you can also modify those and change this URL altogether. If that's the case, in the downloaded zip look into `index.json` file for `"downloadUrl"` field. The default URL I provided uses very minimalist settings.
 
-Then just run `meikipop build-dict` command and your character dictionary should be included. I disabled caching for downloads of dicts, so that every time `build-dict` is called, all dicts will be redownloaded. This is desirable especially for the charater dictionary, but I do want to keep my other dicts up to date as well, which the former caching prevented.
+Then just run `meikipop build-dict` command and your character dictionary should be included. The character dictionary is redownloaded every time `build-dict` is called, while the other dicts are only redownloaded once their cached copies are more than 24 hours old.
 
 The author (rtr46) has a nice release setup in place, so I recommend just installing meikipop normally and then copying the `/src/meikipop/scripts/build_dictionary.py` over.
 
