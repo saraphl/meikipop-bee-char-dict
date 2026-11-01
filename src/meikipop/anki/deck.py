@@ -22,6 +22,7 @@ SEARCH_SPECIAL_REGEX = re.compile(r'([\\"*_])')
 
 STATE_NEW = 'new'
 STATE_PRIORITIZED = 'prioritized'
+STATE_SUSPENDED = 'suspended'
 
 
 class AnkiError(Exception):
@@ -52,7 +53,7 @@ def _is_adverb_to(entry) -> bool:
 
 class AnkiDeck:
     """
-    Index of the new cards in the configured Anki deck, keyed by (word, reading).
+    Index of the new and suspended cards in the configured Anki deck, keyed by (word, reading).
     Prioritized cards are new cards positioned below `anki_prioritized_below` (the add-on uses negative positions),
     so the state survives restarts.
     """
@@ -62,6 +63,7 @@ class AnkiDeck:
         self._index: Dict[Tuple[str, str], int] = {}
         self._to_index: Dict[Tuple[str, str], int] = {}  # deck adverbs like ひしひしと, keyed without the と
         self._prioritized: Set[int] = set()
+        self._suspended: Set[int] = set()
         self._pending: Set[int] = set()
         self._loader: Optional[threading.Thread] = None
         self._reload_event = threading.Event()
@@ -111,7 +113,7 @@ class AnkiDeck:
             self.start()
         else:
             with self._lock:
-                self._index, self._to_index, self._prioritized = {}, {}, set()
+                self._index, self._to_index, self._prioritized, self._suspended = {}, {}, set(), set()
                 self.version += 1
 
     def _load_loop(self):
@@ -143,17 +145,22 @@ class AnkiDeck:
     def _load(self):
         if not config.anki_deck:
             raise AnkiError("no deck configured")
-        deck_query = f'"deck:{_escape_search(config.anki_deck)}" -is:suspended is:new'
+        deck = f'"deck:{_escape_search(config.anki_deck)}"'
+        deck_query = f'{deck} -is:suspended is:new'
         word_fields = [f.strip() for f in config.anki_word_fields.split(',') if f.strip()]
         reading_field = config.anki_reading_field.strip()
 
         new_cards = set(self._request('findCards', query=deck_query))
         prioritized = set(self._request('findCards', query=f'{deck_query} prop:pos<{config.anki_prioritized_below}'))
-        notes = self._request('notesInfo', query=deck_query)
+        suspended = set(self._request('findCards', query=f'{deck} is:suspended'))
+        notes = self._request('notesInfo', query=f'{deck} (is:new OR is:suspended)')
 
         index, to_index = {}, {}
         for note in notes:
-            card_ids = [c for c in note.get('cards', []) if c in new_cards]
+            cards = note.get('cards', [])
+            card_ids = [c for c in cards if c in new_cards]
+            if not card_ids and all(c in suspended for c in cards):  # skip notes with another card in study
+                card_ids = cards
             if not card_ids:
                 continue
             fields = note['fields']
@@ -168,13 +175,14 @@ class AnkiDeck:
                     to_index.setdefault(_key(word[:-1], word_reading[:-1]), card_ids[0])
 
         with self._lock:
-            self._index, self._to_index, self._prioritized = index, to_index, prioritized
+            self._index, self._to_index, self._prioritized, self._suspended = index, to_index, prioritized, suspended
             self.version += 1
         if not index:
-            logger.warning(f"Anki: No new cards found in deck '{config.anki_deck}'. Check the deck and field names.")
+            logger.warning(f"Anki: No new or suspended cards found in deck '{config.anki_deck}'. Check the deck and field names.")
         else:
-            logger.info(f"Anki: Loaded {len(new_cards)} new cards from deck '{config.anki_deck}' via AnkiConnect "
-                        f"({len(prioritized)} prioritized).")
+            marked_suspended = suspended.intersection(index.values())
+            logger.info(f"Anki: Loaded {len(new_cards)} new ({len(prioritized)} prioritized) and {len(marked_suspended)} "
+                        f"suspended cards from deck '{config.anki_deck}' via AnkiConnect.")
 
     def _card_for(self, entry) -> Optional[int]:
         key = _key(entry.written_form, entry.reading)
@@ -187,56 +195,74 @@ class AnkiDeck:
         card_id = self._card_for(entry)
         if card_id is None:
             return None
+        if card_id in self._suspended:
+            return STATE_SUSPENDED
         return STATE_PRIORITIZED if card_id in self._prioritized else STATE_NEW
 
-    def prioritize(self, entry):
-        """Queues the entry's new card to be moved to the top of the new card queue."""
+    def promote(self, entry):
+        """Queues the entry's card to be unsuspended and, if it's new, moved to the top of the new card queue."""
         with self._lock:
             card_id = self._card_for(entry)
             if card_id is None or card_id in self._prioritized or card_id in self._pending:
                 return
             self._pending.add(card_id)
             if not self._worker:
-                self._worker = threading.Thread(target=self._prioritize_loop, daemon=True, name="AnkiPrioritize")
+                self._worker = threading.Thread(target=self._promote_loop, daemon=True, name="AnkiPromote")
                 self._worker.start()
         self._queue.put((card_id, entry.written_form))
 
-    def _prioritize_loop(self):
+    def _promote_loop(self):
         # a single worker keeps positions unique and in the order the keys were pressed
         while True:
             card_id, written_form = self._queue.get()
             try:
-                self._prioritize(card_id, written_form)
+                self._promote(card_id, written_form)
             except AnkiError as e:
-                logger.warning(f"Anki: Could not prioritize '{written_form}': {e}")
+                logger.warning(f"Anki: Could not unsuspend or reposition '{written_form}': {e}")
             except Exception:
-                logger.exception(f"Anki: Unexpected error while prioritizing '{written_form}'.")
+                logger.exception(f"Anki: Unexpected error while promoting '{written_form}'.")
             finally:
                 with self._lock:
                     self._pending.discard(card_id)
 
-    def _prioritize(self, card_id: int, written_form: str):
-        # AnkiConnect rejects position edits, so meikipop's own Anki add-on (anki_addon/meikipop_bridge) does this
-        response = self._post_json(f'{config.anki_bridge_url}/prioritize', {'card': card_id},
+    def _drop(self, card_id: int):
+        # caller holds the lock
+        self._index = {k: v for k, v in self._index.items() if v != card_id}
+        self._to_index = {k: v for k, v in self._to_index.items() if v != card_id}
+        self._suspended.discard(card_id)
+        self.version += 1
+
+    def _promote(self, card_id: int, written_form: str):
+        # AnkiConnect rejects position edits, so meikipop's own Anki add-on (anki_addon/meikipop_bridge) does both
+        response = self._post_json(f'{config.anki_bridge_url}/promote', {'card': card_id},
                                    "meikipop's Anki add-on", timeout=BRIDGE_TIMEOUT_SECONDS, hint=' (is it installed?)')
         if 'error' in response:
-            raise AnkiError(f"meikipop's Anki add-on failed: {response['error']}")
+            hint = ' (update it in addons21 and restart Anki)' if response['error'] == 'unknown endpoint' else ''
+            raise AnkiError(f"meikipop's Anki add-on failed: {response['error']}{hint}")
 
         if 'skipped' in response:
             logger.info(f"Anki: Skipped '{written_form}': {response['skipped']}.")
-            if response.get('stale'):  # no longer a new card, so drop its marker
+            if response.get('stale'):  # no longer a new or suspended card, so drop its marker
                 with self._lock:
-                    self._index = {k: v for k, v in self._index.items() if v != card_id}
-                    self._to_index = {k: v for k, v in self._to_index.items() if v != card_id}
-                    self.version += 1
+                    self._drop(card_id)
             return
-        if not isinstance(response.get('position'), int):
+        position = response.get('position')
+        if 'position' not in response or (position is not None and not isinstance(position, int)):
             raise AnkiError(f"unexpected response from meikipop's Anki add-on: {response!r}")
 
         with self._lock:
-            self._prioritized.add(card_id)
-            self.version += 1
-        logger.info(f"Anki: Moved '{written_form}' to the top of the new card queue (position {response['position']}).")
+            if position is None and not response.get('new'):  # a known card was only unsuspended
+                self._drop(card_id)
+            else:
+                self._suspended.discard(card_id)
+                if position is not None:
+                    self._prioritized.add(card_id)
+                self.version += 1
+        if position is None:
+            logger.info(f"Anki: Unsuspended '{written_form}'.")
+        else:
+            moved = 'Unsuspended and moved' if response.get('unsuspended') else 'Moved'
+            logger.info(f"Anki: {moved} '{written_form}' to the top of the new card queue (position {position}).")
 
 
 anki_deck = AnkiDeck()

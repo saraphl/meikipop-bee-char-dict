@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QFontInfo
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QApplication
 
-from meikipop.anki.deck import anki_deck, STATE_PRIORITIZED
+from meikipop.anki.deck import anki_deck, STATE_NEW, STATE_PRIORITIZED, STATE_SUSPENDED
 from meikipop.config.config import config, IS_MACOS
 from meikipop.dictionary.lookup import DictionaryEntry, KanjiEntry
 from meikipop.gui.magpie_manager import magpie_manager
@@ -21,6 +21,8 @@ if IS_MACOS:
         Quartz = None
 
 logger = logging.getLogger(__name__)
+
+ANKI_LABELS = {STATE_NEW: "new", STATE_PRIORITIZED: "new ✓", STATE_SUSPENDED: "suspended"}
 
 
 class Popup(QWidget):
@@ -261,7 +263,8 @@ class Popup(QWidget):
             header_text_calc = entry.written_form
             if entry.reading: header_text_calc += f" [{entry.reading}]"
             anki_state = anki_deck.get_state(entry) if config.anki_enabled else None
-            if anki_state: header_text_calc += " new ✓" if anki_state == STATE_PRIORITIZED else " new"
+            anki_label = ANKI_LABELS.get(anki_state)
+            if anki_label: header_text_calc += f" {anki_label}"
             header_ratio = len(header_text_calc) / self.header_chars_per_line
             max_ratio = max(max_ratio, header_ratio)
 
@@ -274,13 +277,16 @@ class Popup(QWidget):
                     header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">({deconj_str})</span>'
             if config.show_frequency and entry.freq < 999_999:
                 header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.6;">#{entry.freq}</span>'
-            if anki_state == STATE_PRIORITIZED:
-                # more saturated than the reading color, so it stands out from the word-colored "new"
-                h, _, _, _ = QColor(config.color_highlight_reading).getHsvF()
-                badge_color = QColor.fromHsvF(max(h, 0.0), 0.8, 0.85).name()
-                header_html += f' <span style="color:{badge_color}; font-size:{config.font_size_definitions - 2}px;">new ✓</span>'
-            elif anki_state:
-                header_html += f' <span style="color:{config.color_highlight_word}; font-size:{config.font_size_definitions - 2}px;">new</span>'
+            if anki_label:
+                if anki_state == STATE_PRIORITIZED:
+                    # more saturated than the reading color, so it stands out from the word-colored "new"
+                    h, _, _, _ = QColor(config.color_highlight_reading).getHsvF()
+                    badge_color = QColor.fromHsvF(max(h, 0.0), 0.8, 0.85).name()
+                elif anki_state == STATE_SUSPENDED:
+                    badge_color = '#E8820C'  # mid-tone orange, readable on both light and dark backgrounds
+                else:
+                    badge_color = config.color_highlight_word
+                header_html += f' <span style="color:{badge_color}; font-size:{config.font_size_definitions - 2}px;">{anki_label}</span>'
             def_text_parts_calc = []
             def_text_parts_html = []
             for idx, sense in enumerate(entry.senses):
@@ -337,13 +343,13 @@ class Popup(QWidget):
         return full_html, final_size
 
     def handle_numpad_digit(self, digit: int):
-        # called from the numpad listener thread - prioritizes the n-th displayed entry in Anki
+        # called from the numpad listener thread - unsuspends or prioritizes the n-th displayed entry in Anki
         entries = self._last_latest_data
         if not self.is_visible or not config.anki_enabled or not entries or digit > len(entries):
             return
         entry = entries[digit - 1]
         if isinstance(entry, DictionaryEntry):
-            anki_deck.prioritize(entry)
+            anki_deck.promote(entry)
 
     def move_to(self, x, y):
         cursor_point = QPoint(x, y)
