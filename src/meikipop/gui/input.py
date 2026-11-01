@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 class LinuxX11KeyboardController:
     def __init__(self, hotkey_str):
         self.hotkey_str = hotkey_str.lower()
+        self._lock = threading.Lock()  # used from the input and GUI threads, and Xlib deadlocks under concurrent use
         try:
             self.display = xlib_display.Display()
             self._setup_keycodes()
@@ -62,7 +63,8 @@ class LinuxX11KeyboardController:
 
     def is_hotkey_pressed(self) -> bool:
         try:
-            key_map = self.display.query_keymap()
+            with self._lock:
+                key_map = self.display.query_keymap()
             for group in self.modifier_groups:
                 group_is_pressed = False
                 for keycode in group:
@@ -135,7 +137,8 @@ class MacOSKeyboardController:
             return False
 
 class InputLoop(threading.Thread):
-    _mouse_controller = None
+    # one controller per thread, since a shared Xlib connection deadlocks under concurrent use
+    _thread_local = threading.local()
 
     def __init__(self, shared_state):
         super().__init__(daemon=True, name="InputLoop")
@@ -213,10 +216,11 @@ class InputLoop(threading.Thread):
 
     @staticmethod
     def get_mouse_pos():
+        local = InputLoop._thread_local
         try:
-            pos = InputLoop._mouse_controller.position
+            pos = local.mouse_controller.position
         except Exception:
-            InputLoop._mouse_controller = mouse.Controller()
-            pos = InputLoop._mouse_controller.position
+            local.mouse_controller = mouse.Controller()
+            pos = local.mouse_controller.position
         # Convert floats to integers for QPoint compatibility
         return int(pos[0]), int(pos[1])
