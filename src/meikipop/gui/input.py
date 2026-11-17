@@ -188,7 +188,7 @@ class InputLoop(threading.Thread):
                 if current_mouse_pos != last_mouse_pos:
                     self.shared_state.hit_scan_queue.trigger()
 
-                if hotkey_was_pressed and not hotkey_is_pressed:
+                if hotkey_was_pressed and not hotkey_is_pressed and not config.auto_scan_mode:
                     logger.info(f"Input: Hotkey '{config.hotkey}' released.")
 
                 last_mouse_pos = current_mouse_pos
