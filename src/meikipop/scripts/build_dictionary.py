@@ -96,6 +96,22 @@ def add_name_parts(lookup_map: dict):
                         entries.append(me)
 
 
+def drop_duplicate_spellings(entries: dict, lookup_map: dict):
+    """Bee's dictionary has an entry per spelling of a name (橘 陸郎, 橘陸郎, たちばなりくろう, …) with the same senses:
+    keep only the first, main spelling per reading under each key, and drop entries no key refers to anymore."""
+    for key, me_list in lookup_map.items():
+        kept, seen = [], set()
+        for me in me_list:
+            same = (repr(entries.get(me[3])), me[1] or me[0])  # same senses and reading
+            if same not in seen:
+                seen.add(same)
+                kept.append(me)
+        lookup_map[key] = kept
+    referenced = {me[3] for me_list in lookup_map.values() for me in me_list}
+    for entry_id in [i for i in entries if i not in referenced]:
+        del entries[entry_id]
+
+
 # ── Download / cache ───────────────────────────────────────────────────────────
 
 def ensure_dirs():
@@ -582,6 +598,7 @@ def main():
     with zipfile.ZipFile(io.BytesIO(bee_zip), 'r') as zf:
         entries, lookup_map = build_from_zip(zf, dict_index=0, freq_override={})
         add_name_parts(lookup_map)
+        drop_duplicate_spellings(entries, lookup_map)
 
         # Merge into combined structures
         # On entry_id collision (same sequence across different dicts), last writer wins.
