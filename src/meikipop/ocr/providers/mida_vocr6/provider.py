@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import onnxruntime as ort
@@ -55,30 +55,41 @@ class MidaVocr6Provider(OcrProvider):
 
             lines = self.detector.detect(rgb)
             crops = make_crops(lines, DEFAULT_H, DEFAULT_V, W, H)
-            paragraphs = [p for p in self._pool.map(lambda crop: self._read_line(rgb, crop), crops) if p is not None]
-            return group_lines_into_paragraphs(paragraphs)
+            return group_lines_into_paragraphs([p for p in self._read_lines(rgb, crops) if p is not None])
 
         except Exception as e:
             logger.error(f"an error occurred in {self.NAME}: {e}", exc_info=True)
             return None
 
-    def _read_line(self, rgb: np.ndarray, crop: LineCrop) -> Optional[Paragraph]:
+    def _read_lines(self, rgb: np.ndarray, crops: List[LineCrop]) -> List[Optional[Paragraph]]:
+        H, W = rgb.shape[:2]
+        reads = self._pool.map(lambda crop: self._recognize(rgb, crop), crops)
+        lines = [(crop, chars) for crop, chars in zip(crops, reads) if chars]
+        self._refine(rgb, lines)
+        return [_paragraph(crop, chars, W, H) for crop, chars in lines]
+
+    def _refine(self, rgb: np.ndarray, lines: List[Tuple[LineCrop, List[V.Char]]]):
+        """Hook for subclasses: correct the recognized characters in place before paragraphs are built."""
+
+    def _recognize(self, rgb: np.ndarray, crop: LineCrop) -> Optional[List[V.Char]]:
         try:
             grey = V.grey_of(crop_image(rgb, crop))
             rec = self.v_recognizer if crop.vertical else self.recognizer
-            chars = rec.read(grey, invert=V.line_dark(grey))
+            return rec.read(grey, invert=V.line_dark(grey))
         except Exception as e:
             logger.warning(f"could not read the line at {crop.box}: {e}")
             return None
 
-        words = [Word(text=c.text, separator="", box=_norm(*box, W=rgb.shape[1], H=rgb.shape[0]))
-                 for c, box in zip(chars, cell_boxes(crop, [(c.x0, c.x1) for c in chars]))]
-        full_text = "".join(c.text for c in chars)
-        if not JAPANESE_REGEX.search(full_text):
-            return None
-        x0, y0, x1, y1 = crop.box
-        return Paragraph(full_text=full_text, words=words, box=_norm(x0, y0, x1, y1, rgb.shape[1], rgb.shape[0]),
-                         is_vertical=crop.vertical)
+
+def _paragraph(crop: LineCrop, chars: List[V.Char], W: int, H: int) -> Optional[Paragraph]:
+    """One recognized line as a Paragraph of one Word per character, or None without kana or kanji."""
+    full_text = "".join(c.text for c in chars)
+    if not JAPANESE_REGEX.search(full_text):
+        return None
+    words = [Word(text=c.text, separator="", box=_norm(*box, W=W, H=H))
+             for c, box in zip(chars, cell_boxes(crop, [(c.x0, c.x1) for c in chars]))]
+    x0, y0, x1, y1 = crop.box
+    return Paragraph(full_text=full_text, words=words, box=_norm(x0, y0, x1, y1, W, H), is_vertical=crop.vertical)
 
 
 def _norm(x0: float, y0: float, x1: float, y1: float, W: int, H: int) -> BoundingBox:

@@ -12,12 +12,17 @@ from meikipop.dictionary.customdict import Dictionary, WRITTEN_FORM_INDEX, READI
 from meikipop.dictionary.deconjugator import Deconjugator, Form
 
 KANJI_REGEX = re.compile(r'[\u4e00-\u9faf]')
+# ・ and ＝ are left out: dictionary entries use them inside words and names (テレフォン・クラブ, ミチコ=フルーレティ)
 JAPANESE_SEPARATORS = {
     "、", "。", "「", "」", "｛", "｝", "（", "）", "【", "】",
-    "『", "』", "〈", "〉", "《", "》", "：", "・", "／",
-    "…", "︙", "‥", "︰", "＋", "＝", "－", "÷", "？", "！",
+    "『", "』", "〈", "〉", "《", "》", "：", "／",
+    "…", "︙", "‥", "︰", "＋", "－", "÷", "？", "！",
     "．", "～", "―", "!", "?",
 }
+# OCR and dictionaries mix full-width and ASCII forms (ミチコ＝… / みちこ=…, Tシャツ / Ｔシャツ), so both are tried
+TO_ASCII = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
+TO_FULLWIDTH = {c: c + 0xFEE0 for c in range(0x21, 0x7F)}
+MIDDLE_DOTS = str.maketrans("･·", "・・")
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +100,7 @@ class Lookup(threading.Thread):
             return []
         logger.info(f"Looking up: {lookup_string}")  # keep at info level so people know whats up
 
-        text = lookup_string.strip()
+        text = lookup_string.strip().translate(MIDDLE_DOTS)
         text = text[:config.max_lookup_length]
         for i, ch in enumerate(text):
             if ch in JAPANESE_SEPARATORS:
@@ -195,22 +200,14 @@ class Lookup(threading.Thread):
 
     def _get_map_entries(self, text: str) -> List[tuple]:
         """
-        Look up `text` in lookup_map with hira↔kata fallback.
+        Look up `text` in lookup_map with full-width↔ASCII and hira↔kata fallbacks.
         Kanji and kana strings never share keys so a single map suffices.
         """
-        result = self.dictionary.lookup_map.get(text, [])
-        if result:
-            return list(result)
-        kata = self._hira_to_kata(text)
-        if kata != text:
-            result = self.dictionary.lookup_map.get(kata, [])
-            if result:
-                return list(result)
-        hira = self._kata_to_hira(text)
-        if hira != text:
-            result = self.dictionary.lookup_map.get(hira, [])
-            if result:
-                return list(result)
+        for variant in dict.fromkeys((text, text.translate(TO_ASCII), text.translate(TO_FULLWIDTH))):
+            for convert in (str, self._hira_to_kata, self._kata_to_hira):
+                result = self.dictionary.lookup_map.get(convert(variant))
+                if result:
+                    return list(result)
         return []
 
     def _format_and_sort(
