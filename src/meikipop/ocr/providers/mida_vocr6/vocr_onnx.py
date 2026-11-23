@@ -1,6 +1,6 @@
 # meikipop/ocr/providers/mida_vocr6/vocr_onnx.py
 """The VOCR6 line recognizer on ONNX Runtime: the recognizer path of vita-vn-ocr's `tools/vocr_onnx.py` (GPL-3.0-or-later),
-trimmed to what this provider uses (no spotter, no character LM, no confidences). Unchanged except cells():
+trimmed to what this provider uses (no spotter, no character LM). Unchanged except cells() and Char.conf:
 
 - preprocess(): runtime/vocr.c's line preprocessing: integer luma (77 R + 150 G + 29 B) >> 8, 255 - grey for dark text,
   OpenCV INTER_LINEAR's fixed-point resize to the model's height, right pad to a multiple of 8 by repeating the last column
@@ -175,6 +175,7 @@ class Char:
     text: str
     x0: float  # its cell [x0, x1) along the line, in crop px
     x1: float
+    conf: float = 1.0  # highest softmax probability of its class over its frames
 
 
 class Recognizer:
@@ -196,10 +197,18 @@ class Recognizer:
         feeds = {"grey": np.ascontiguousarray(x)[None, None]}
         if self.has_sections:
             feeds["head_sections"] = np.array(True)
-        sp = spans(self.sess.run(["best"], feeds)[0])
-        return [Char(self.vocab[cls], x0 / Q, x1 / Q)
-                for (cls, _, _), (_, x0, x1) in
+        best, logits = self.sess.run(["best", "logits"], feeds)
+        sp = spans(best)
+        return [Char(self.vocab[cls], x0 / Q, x1 / Q, confidence(logits, cls, f0, f1))
+                for (cls, f0, f1), (_, x0, x1) in
                 zip(sp, cells(sp, w, h, nw, self.groups, self.stride, self.cal))]
+
+
+def confidence(logits, cls, f0, f1):
+    """The highest softmax probability of class cls over frames f0..f1 (a stable log-softmax)."""
+    lg = logits[f0:f1 + 1]
+    m = lg.max(1)
+    return float(np.exp(lg[:, cls] - m - np.log(np.exp(lg - m[:, None]).sum(1))).max())
 
 
 def line_dark(g: np.ndarray) -> bool:

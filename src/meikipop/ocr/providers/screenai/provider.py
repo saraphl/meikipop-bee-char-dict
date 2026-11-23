@@ -134,39 +134,38 @@ class ScreenAiOcr(OcrProvider):
         try:
             if image.width * image.height > 4000000:
                 image.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
-
-            img_rgba = image.convert('RGBA')
-            width, height = img_rgba.size
-            img_bytes = img_rgba.tobytes()
-
-            bitmap = self.SkBitmap()
-            bitmap.fPixmap.fPixels = ctypes.cast(ctypes.c_char_p(img_bytes), ctypes.c_void_p)
-            bitmap.fPixmap.fRowBytes = width * 4
-            bitmap.fPixmap.fInfo.fColorInfo.fColorType = 4  # kRGBA_8888
-            bitmap.fPixmap.fInfo.fColorInfo.fAlphaType = 1  # kPremul
-            bitmap.fPixmap.fInfo.fDimensions.fWidth = width
-            bitmap.fPixmap.fInfo.fDimensions.fHeight = height
-
-            output_length = ctypes.c_uint32(0)
-
-            # Suppress the heavy console spam during the actual OCR process
-            with suppress_output():
-                result_ptr = self.lib.PerformOCR(ctypes.byref(bitmap), ctypes.byref(output_length))
-
-            if not result_ptr:
-                return []
-
-            proto_bytes = ctypes.string_at(result_ptr, output_length.value)
-            self.lib.FreeLibraryAllocatedCharArray(result_ptr)
-
-            response = VisualAnnotation()
-            response.ParseFromString(proto_bytes)
-
-            return self._transform(response, width, height)
+            return self._transform(self.annotate(image), image.width, image.height)
 
         except Exception as e:
             logger.error(f"{self.NAME} error: {e}", exc_info=True)
             return None
+
+    def annotate(self, image: Image.Image) -> VisualAnnotation:
+        """Screen AI's raw result for an image, in its pixel coordinates (empty if nothing was found)."""
+        img_rgba = image.convert('RGBA')
+        width, height = img_rgba.size
+        img_bytes = img_rgba.tobytes()
+
+        bitmap = self.SkBitmap()
+        bitmap.fPixmap.fPixels = ctypes.cast(ctypes.c_char_p(img_bytes), ctypes.c_void_p)
+        bitmap.fPixmap.fRowBytes = width * 4
+        bitmap.fPixmap.fInfo.fColorInfo.fColorType = 4  # kRGBA_8888
+        bitmap.fPixmap.fInfo.fColorInfo.fAlphaType = 1  # kPremul
+        bitmap.fPixmap.fInfo.fDimensions.fWidth = width
+        bitmap.fPixmap.fInfo.fDimensions.fHeight = height
+
+        output_length = ctypes.c_uint32(0)
+
+        # Suppress the heavy console spam during the actual OCR process
+        with suppress_output():
+            result_ptr = self.lib.PerformOCR(ctypes.byref(bitmap), ctypes.byref(output_length))
+
+        response = VisualAnnotation()
+        if result_ptr:
+            proto_bytes = ctypes.string_at(result_ptr, output_length.value)
+            self.lib.FreeLibraryAllocatedCharArray(result_ptr)
+            response.ParseFromString(proto_bytes)
+        return response
 
     def _transform(self, response: VisualAnnotation, img_w: int, img_h: int) -> List[Paragraph]:
         raw_lines = []
