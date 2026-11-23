@@ -32,6 +32,7 @@ OUTPUT_PATH = paths.dictionary_path
 DECONJUGATOR_PATH = os.path.join(os.path.dirname(__file__), 'deconjugator.json')
 SYNTHETIC_ID_START = 10_000_000  # safely above any real JMdict seq number
 DEFAULT_FREQ       = 999_999
+NAME_PART_SEPARATORS = re.compile(r'[=＝・･·]')
 
 URLS = {
     'jmdict_e':  'http://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz',
@@ -76,6 +77,23 @@ def get_variants(reading: str) -> set:
         if f in RENDAKU_MAP:
             v.add(RENDAKU_MAP[f] + reading[1:-1] + 'っ')
     return v
+
+
+def add_name_parts(lookup_map: dict):
+    """Also index each part of names joined by = or ・ (ミチコ=フルーレティ), which Bee's dictionary only splits on spaces."""
+    for surface, me_list in list(lookup_map.items()):
+        for me in me_list:
+            # the written form too, or a katakana part is shadowed by a JMdict key of the same spelling (レイ)
+            for name in dict.fromkeys(n for n in (surface, me[0]) if n):
+                parts = [p for p in NAME_PART_SEPARATORS.split(name) if p]
+                if len(parts) < 2:
+                    continue
+                for part in dict.fromkeys(parts):
+                    if len(part) == 1 and not '\u4e00' <= part <= '\u9fff':
+                        continue  # a lone kana would attach the name to particles like の
+                    entries = lookup_map.setdefault(part, [])
+                    if me not in entries:
+                        entries.append(me)
 
 
 # ── Download / cache ───────────────────────────────────────────────────────────
@@ -563,6 +581,7 @@ def main():
     t0 = time.time()
     with zipfile.ZipFile(io.BytesIO(bee_zip), 'r') as zf:
         entries, lookup_map = build_from_zip(zf, dict_index=0, freq_override={})
+        add_name_parts(lookup_map)
 
         # Merge into combined structures
         # On entry_id collision (same sequence across different dicts), last writer wins.
